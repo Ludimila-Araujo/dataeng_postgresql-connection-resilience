@@ -1,274 +1,173 @@
-\# PostgreSQL Connection Resilience
+# PostgreSQL Connection Resilience
 
+**Database Reliability Engineering | PostgreSQL | Docker | Replication**
 
+Projeto desenvolvido como atividade prática da disciplina **DBaaS – Alta Disponibilidade e Réplicas**, do MBA em Engenharia e Ciência de Dados.
 
-\*\*Database Reliability Engineering | PostgreSQL | Docker | Replication | Incident Response\*\*
+O trabalho tem como objetivo reproduzir, diagnosticar e tratar um incidente de disponibilidade em um ambiente PostgreSQL replicado.
 
+---
 
+## 1. Identificação do projeto
 
-\## 1. Identificação
+| Informação | Descrição |
+|---|---|
+| Disciplina | DBaaS – Alta Disponibilidade e Réplicas |
+| Atividade | Incidentes em Bancos Replicados |
+| Cenário | D – Esgotamento de conexões |
+| Banco de dados | PostgreSQL 16 |
+| Ambiente | Docker Compose |
+| Instância primária | Porta 5442 |
+| Instância réplica | Porta 5443 |
+| Repositório | [GitHub](https://github.com/Ludimila-Araujo/dataeng_postgresql-connection-resilience) |
 
+## 2. Cenário do incidente
 
+O cenário D simula o esgotamento de conexões disponíveis para um usuário da aplicação, provocando a recusa de novas conexões ao banco de dados.
 
-\- \*\*Disciplina:\*\* DBaaS – Alta Disponibilidade e Réplicas
+Para reproduzir o incidente, foi criada a role `app` com limite de três conexões simultâneas:
 
-\- \*\*Atividade:\*\* Incidentes em Bancos Replicados
+```sql
+CREATE ROLE app LOGIN PASSWORD 'app' CONNECTION LIMIT 3;
+```
 
-\- \*\*Cenário:\*\* D – Esgotamento de conexões (negação de serviço)
+Em seguida, três sessões foram mantidas ocupadas utilizando a função `pg_sleep()`.
 
-\- \*\*Ambiente:\*\* PostgreSQL com Docker Compose
+Ao tentar estabelecer uma quarta conexão, o PostgreSQL retornou:
 
-\- \*\*Primário:\*\* porta 5442
+```text
+FATAL: too many connections for role "app"
+```
 
-\- \*\*Réplica:\*\* porta 5443
+## 3. Ambiente e arquitetura
 
-\- \*\*Repositório:\*\* \[dataeng\_postgresql-connection-resilience](https://github.com/Ludimila-Araujo/dataeng\_postgresql-connection-resilience)
+O ambiente experimental utiliza duas instâncias PostgreSQL executadas em containers Docker:
 
+| Instância | Porta | Função |
+|---|---:|---|
+| Primary | 5442 | Instância principal |
+| Replica | 5443 | Instância de réplica |
 
+A verificação do estado das instâncias utiliza:
 
-\## 2. Resumo do incidente
+```sql
+SELECT pg_is_in_recovery();
+```
 
+Resultado esperado:
+- Primário: `false`.
+- Réplica: `true`.
 
+## 4. Reprodução do incidente
 
-O incidente analisado corresponde ao cenário D: esgotamento de conexões, caracterizado pela recusa de novas conexões ao banco de dados em decorrência do atingimento do limite individual configurado para o usuário da aplicação.
+Foram realizadas duas execuções para reproduzir e investigar o comportamento do banco.
 
+### Execução 01: reprodução inicial
 
+Na primeira execução, três sessões foram abertas utilizando `pg_sleep(300)`.
 
-Para reproduzir o problema, foi criada a role `app`, com limite de três conexões simultâneas (`CONNECTION LIMIT 3`). Em seguida, três sessões foram mantidas ocupadas por meio da execução da função `pg\_sleep()`.
+A quarta tentativa de conexão foi recusada, confirmando o esgotamento do limite individual da role `app`.
 
+O diagnóstico identificou três sessões ativas em `pg_stat_activity`.
 
+A tentativa de encerramento administrativo retornou `(0 rows)`. Como as sessões provavelmente terminaram naturalmente antes da intervenção, não foi possível comprovar a recuperação por meio desse procedimento.
 
-Ao tentar estabelecer uma quarta conexão, o PostgreSQL retornou o erro:
+### Execução 02: reprodução controlada
 
+Na segunda execução, foi utilizado `pg_sleep(1800)` para manter as sessões ocupadas por mais tempo.
 
+O procedimento permitiu:
 
-`FATAL: too many connections for role "app"`
+1. Ocupar as três conexões disponíveis.
+2. Reproduzir a recusa da quarta conexão.
+3. Identificar as três sessões ativas.
+4. Encerrar administrativamente as sessões.
+5. Confirmar o restabelecimento de uma nova conexão.
 
+## 5. Linha do tempo
 
+### Execução 01
 
-A primeira execução permitiu reproduzir e diagnosticar o incidente, mas não comprovou a recuperação por intervenção administrativa, pois as sessões provavelmente terminaram naturalmente antes da tentativa de encerramento.
-
-
-
-Na segunda execução, com sessões de maior duração, foi possível identificar as três conexões ativas e encerrá-las utilizando `pg\_terminate\_backend()`. Uma nova conexão com o usuário `app` foi estabelecida com sucesso, comprovando o restabelecimento da disponibilidade.
-
-
-
-O experimento demonstrou como limites individuais de conexão podem contribuir para a contenção de incidentes e como a identificação e o encerramento controlado de sessões podem restaurar o acesso ao banco.
-
-
-
-\## 3. Linha do tempo
-
-
-
-\### Execução 01: reprodução inicial
-
-
-
-| Horário | Ação | Resultado |
-
+| Horário | Evento | Resultado |
 |---|---|---|
+| 12:43 | Tentativa de quarta conexão | Conexão recusada |
+| 12:49 | Tentativa de encerramento administrativo | Retorno `(0 rows)` |
+| 12:52 | Nova conexão | Conexão estabelecida após o término natural das sessões |
 
-| 12:43 | Tentativa de estabelecer a quarta conexão | Conexão recusada por esgotamento do limite da role `app` |
+### Execução 02
 
-| 12:49 | Execução de `pg\_terminate\_backend()` | Retorno `(0 rows)`, sem comprovação de encerramento administrativo |
-
-| 12:52 | Nova tentativa de conexão | Conexão estabelecida após o término natural das sessões, sem comprovação de recuperação por intervenção |
-
-
-
-\### Execução 02: reprodução controlada e recuperação
-
-
-
-| Horário | Ação | Resultado |
-
+| Horário | Evento | Resultado |
 |---|---|---|
+| 13:28 | Abertura das três sessões | Conexões ocupadas |
+| 13:29 | Tentativa de quarta conexão | Conexão recusada |
+| 13:29 | Diagnóstico com `pg_stat_activity` | Três sessões `active` |
+| Após o diagnóstico | Execução de `pg_terminate_backend()` | Três sessões encerradas com sucesso |
+| 13:31:17 | Nova tentativa de conexão | Conexão estabelecida |
 
-| 13:28 | Abertura das três sessões com `pg\_sleep(1800)` | Três conexões ocupadas |
+## 6. Métricas de recuperação
 
-| 13:29 | Tentativa de estabelecer a quarta conexão | Conexão recusada |
+### Recovery Time Objective (RTO)
 
-| 13:29 | Consulta à `pg\_stat\_activity` | Três sessões identificadas no estado `active` |
+O RTO representa o intervalo entre a identificação da indisponibilidade e o restabelecimento do acesso ao banco.
 
-| 13:30 aproximadamente | Execução de `pg\_terminate\_backend()` | Três sessões encerradas com sucesso (`t`) |
+Na segunda execução:
 
-| 13:31 | Nova tentativa de conexão | Conexão estabelecida com sucesso |
+- **T0:** 13:29, quarta conexão recusada.
+- **T1:** 13:31:17, nova conexão estabelecida.
+- **RTO observado:** aproximadamente 2 minutos.
 
+A precisão da medição é limitada porque o horário de T0 foi registrado apenas até o minuto.
 
-
-
-
-\## 4. Medições
-
-
-
-\### Recovery Time Objective (RTO)
-
-
-
-O RTO representa o intervalo entre a identificação da indisponibilidade e o restabelecimento do acesso ao banco de dados.
-
-
-
-Na segunda execução, foram registrados os seguintes marcos:
-
-
-
-\- \*\*T0:\*\* 13:29, tentativa de quarta conexão recusada.
-
-\- \*\*T1:\*\* 13:31, nova conexão estabelecida com sucesso.
-
-\- \*\*RTO observado:\*\* aproximadamente 2 minutos.
-
-
-
-
-
-\### Recovery Point Objective (RPO)
-
-
+### Recovery Point Objective (RPO)
 
 O RPO representa a quantidade de dados que poderia ser perdida em decorrência de um incidente.
 
+Neste experimento, não foram realizadas operações de escrita ou transações de negócio durante a reprodução do esgotamento de conexões.
 
+Não foram observadas perdas de dados persistidos. Entretanto, não foi possível medir experimentalmente a perda de dados ou determinar um RPO efetivo.
 
-Neste experimento, não foram realizadas operações de escrita ou transações de negócio durante a reprodução do esgotamento de conexões. O teste concentrou-se na disponibilidade de novas conexões e no encerramento de sessões ativas.
+### Failover
 
+Não foi necessário realizar promoção da réplica ou procedimento de failover. A recuperação ocorreu diretamente no primário.
 
+## 7. Análise da causa raiz
 
-Dessa forma, não foi possível medir experimentalmente a perda de dados ou determinar um RPO efetivo. Também não foram observadas perdas de dados persistidos durante o procedimento realizado.
+A causa raiz identificada foi o esgotamento do limite individual de conexões configurado para a role `app`.
 
+As três sessões simultâneas atingiram o limite estabelecido. Consequentemente, novas conexões utilizando o mesmo usuário foram recusadas pelo PostgreSQL.
 
+A consulta à visão `pg_stat_activity` confirmou a existência das três sessões no estado `active`.
 
-\### Failover e replicação
+**Impacto observado:** impossibilidade de estabelecer novas conexões utilizando a role `app` enquanto as três conexões existentes ocupavam seu limite.
 
+O experimento demonstrou o esgotamento do limite individual da role, não sendo suficiente para concluir que o limite global de conexões do servidor também tenha sido atingido.
 
+## 8. Procedimento de recuperação
 
-O cenário não exigiu promoção da réplica ou procedimento de failover. A recuperação foi realizada diretamente no PostgreSQL primário, por meio do encerramento das sessões que ocupavam o limite de conexões da role `app`.
+A recuperação foi realizada por meio do encerramento administrativo das sessões que ocupavam o limite da role `app`.
 
-
-
-
-
-\## 5. Causa raiz
-
-
-
-\## 5. Causa raiz
-
-
-
-A causa raiz do incidente foi o esgotamento do limite individual de conexões configurado para a role `app` no PostgreSQL.
-
-
-
-A role foi criada com a seguinte configuração:
-
-
-
-`CONNECTION LIMIT 3`
-
-
-
-Durante a reprodução, três sessões simultâneas foram mantidas ocupadas por meio da função `pg\_sleep()`. Com o limite individual atingido, uma quarta tentativa de conexão utilizando o mesmo usuário foi recusada pelo PostgreSQL, retornando:
-
-
-
-`FATAL: too many connections for role "app"`
-
-
-
-A consulta à visão `pg\_stat\_activity` confirmou a existência de três sessões do usuário `app` no estado `active`, demonstrando que o limite configurado havia sido atingido.
-
-
-
-O incidente foi provocado pela combinação de um limite restritivo de conexões para o usuário da aplicação e sessões de longa duração que mantiveram os recursos de conexão ocupados.
-
-
-
-\*\*Impacto observado:\*\* impossibilidade de estabelecer novas conexões utilizando a role `app` enquanto as três conexões existentes ocupavam seu limite.
-
-
-
-\*\*Escopo:\*\* o experimento demonstrou o esgotamento do limite individual da role. Não foram realizadas medições que permitissem concluir que o limite global de conexões do servidor PostgreSQL também havia sido atingido.
-
-
-
-
-
-\## 6. Correção aplicada e validação
-
-
-
-A correção emergencial foi realizada por meio do encerramento administrativo das sessões que ocupavam o limite de conexões da role `app`.
-
-
-
-Foi utilizado o comando:
-
-
+Comando utilizado:
 
 ```sql
-
-SELECT pg\_terminate\_backend(pid)
-
-FROM pg\_stat\_activity
-
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
 WHERE usename = 'app';
-
 ```
 
+Na segunda execução, foram obtidos três retornos positivos (`t`), confirmando o encerramento das sessões.
 
-
-Na segunda execução, o comando retornou três resultados positivos (t), confirmando o encerramento das três sessões identificadas.
-
-
-
-Em seguida, foi realizada uma nova tentativa de conexão utilizando o usuário app:
-
-
+Em seguida, foi realizada uma nova tentativa de conexão:
 
 ```sql
-
-SELECT current\_user, now();
-
+SELECT current_user, now();
 ```
 
+**Resultado:** conexão estabelecida com sucesso, comprovando o restabelecimento do acesso ao banco.
 
+## 9. Evidências experimentais
 
-Resultado da validação: conexão estabelecida com sucesso, confirmando o restabelecimento do acesso ao banco de dados.
+As capturas de tela e registros das execuções estão organizados no diretório `evidencias/`.
 
-
-
-A primeira execução apresentou resultado inconclusivo para a recuperação administrativa, pois o comando retornou (0 rows). A segunda execução, com sessões de maior duração, permitiu comprovar a eficácia do procedimento.
-
-
-
-As medidas preventivas baseadas em parâmetros de timeout serão documentadas após sua configuração e validação experimental.
-
-
-
-\## 7. Comparação com serviço gerenciado
-
-
-
-Pendente de análise.
-
-
-
-\## 8. Prevenção e lições aprendidas
-
-
-
-Pendente de execução e análise.
-
-
-
-\## 9. Respostas às questões do cenário
-
-
-
-Pendente de desenvolvimento.
-
+| Diretório | Conteúdo |
+|---|---|
+| [Exec
