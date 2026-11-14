@@ -149,16 +149,69 @@ docker compose exec primary psql -U app -d postgres -c "SELECT current_user, now
 
 ## 5. Prevenção
 
-**Status:** etapa ainda não executada.
+Após a recuperação do serviço, foram aplicadas configurações para limitar o tempo de execução de consultas e o tempo de permanência de sessões ociosas do usuário `app`.
 
-Comandos previstos para limitar o tempo de execução de consultas e o tempo de permanência de sessões ociosas:
+### 5.1 Configuração do statement_timeout
 
-```sql
-ALTER ROLE app SET statement_timeout = '3s';
-ALTER ROLE app SET idle_session_timeout = '5s';
+Comando executado no primário:
+
+```cmd
+docker compose exec primary psql -U postgres -c "ALTER ROLE app SET statement_timeout = '3s';"
+
+### 5.2 Configuração do idle_session_timeout
+
+Comando executado no primário:
+
+```cmd
+docker compose exec primary psql -U postgres -c "ALTER ROLE app SET idle_session_timeout = '5s';"
 ```
 
-Após a configuração, será realizada a validação em uma nova sessão do usuário `app`.
+**Resultado:** `ALTER ROLE`.
+
+A configuração estabelece o encerramento de sessões que permaneçam ociosas por mais de cinco segundos.
+
+### 5.3 Validação do statement_timeout
+
+Foi aberta uma nova sessão do usuário `app` e executada uma consulta com duração superior ao limite configurado:
+
+```cmd
+docker compose exec primary psql -U app -d postgres -c "SELECT pg_sleep(30);"
+```
+
+**Resultado observado:**
+
+```text
+ERROR: canceling statement due to statement timeout
+```
+
+A consulta foi cancelada pelo PostgreSQL devido ao limite de tempo de execução configurado.
+
+### 5.4 Validação do idle_session_timeout
+
+Foi iniciada uma nova sessão interativa do usuário `app`:
+
+```cmd
+docker compose exec primary psql -U app -d postgres
+```
+
+Dentro da sessão, foi executada a consulta:
+
+```sql
+SELECT current_user, now();
+```
+
+Em seguida, a conexão foi mantida ociosa por mais de cinco segundos.
+
+**Resultado observado:**
+
+```text
+FATAL: terminating connection due to idle-session timeout
+server closed the connection unexpectedly
+```
+
+O encerramento da conexão confirmou a aplicação do limite de tempo para sessões ociosas. Após o encerramento da sessão original, o terminal tentou estabelecer uma nova conexão automaticamente.
+
+**Conclusão:** as duas medidas preventivas foram configuradas e validadas em novas sessões do usuário `app`.
 
 ## 6. Observações sobre as medições
 
@@ -168,4 +221,6 @@ Após a configuração, será realizada a validação em uma nova sessão do usu
 
 ---
 
-**Observação:** este documento registra os comandos e resultados efetivamente observados. As etapas ainda não executadas permanecem identificadas como pendentes.
+---
+
+**Observação:** este documento registra os comandos e resultados efetivamente observados durante a reprodução do incidente, a recuperação do serviço e a aplicação das medidas preventivas.
