@@ -5,6 +5,7 @@
 **Ambiente:** PostgreSQL com Docker Compose  
 **Diretório do ambiente:** `C:\Users\ludim\lab1`
 
+
 ## 1. Preparação e validação do ambiente
 
 ### 1.1 Verificação dos containers
@@ -36,6 +37,7 @@ docker compose exec replica psql -U postgres -c "SELECT pg_is_in_recovery();"
 ```
 
 **Resultado:** `true`, confirmando que o servidor está em recuperação, atuando como réplica.
+
 
 ## 2. Reprodução do incidente
 
@@ -97,6 +99,7 @@ docker compose exec primary psql -U app -d postgres -c "SELECT current_user;"
 FATAL: too many connections for role "app"
 ```
 
+
 ## 3. Diagnóstico
 
 Consulta executada no primário:
@@ -108,6 +111,7 @@ docker compose exec primary psql -U postgres -c "SELECT pid, usename, state, now
 **Resultado da primeira execução:** três sessões do usuário `app` identificadas no estado `active`.
 
 **Resultado da segunda execução:** três sessões do usuário `app` identificadas no estado `active`, executando `pg_sleep`.
+
 
 ## 4. Correção e validação
 
@@ -147,6 +151,7 @@ docker compose exec primary psql -U app -d postgres -c "SELECT current_user, now
 
 **Resultado:** conexão estabelecida com sucesso. O usuário `app` voltou a acessar o banco.
 
+
 ## 5. Prevenção
 
 Após a recuperação do serviço, foram aplicadas configurações para limitar o tempo de execução de consultas e o tempo de permanência de sessões ociosas do usuário `app`.
@@ -157,18 +162,11 @@ Comando executado no primário:
 
 ```cmd
 docker compose exec primary psql -U postgres -c "ALTER ROLE app SET statement_timeout = '3s';"
-
-### 5.2 Configuração do idle_session_timeout
-
-Comando executado no primário:
-
-```cmd
-docker compose exec primary psql -U postgres -c "ALTER ROLE app SET idle_session_timeout = '5s';"
 ```
 
 **Resultado:** `ALTER ROLE`.
 
-A configuração estabelece o encerramento de sessões que permaneçam ociosas por mais de cinco segundos.
+A configuração estabelece o limite de três segundos para a execução de comandos SQL nas novas sessões do usuário `app`.
 
 ### 5.2 Configuração do idle_session_timeout
 
@@ -230,8 +228,6 @@ O encerramento da conexão confirmou a aplicação do limite de tempo para sess�
 - **RTO:** na segunda execução, aproximadamente 2 minutos entre a recusa da quarta conexão, às 13:29, e o restabelecimento do acesso, às 13:31.
 - **RPO:** não houve perda de dados persistidos observada durante o experimento. Como não foram realizadas operações de escrita durante a reprodução, o RPO efetivo não foi medido.
 - Os horários registrados correspondem aos dados observados durante as execuções.
-
----
 
 ---
 
