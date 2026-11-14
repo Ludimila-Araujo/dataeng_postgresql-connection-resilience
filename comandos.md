@@ -170,6 +170,18 @@ docker compose exec primary psql -U postgres -c "ALTER ROLE app SET idle_session
 
 A configuração estabelece o encerramento de sessões que permaneçam ociosas por mais de cinco segundos.
 
+### 5.2 Configuração do idle_session_timeout
+
+Comando executado no primário:
+
+```cmd
+docker compose exec primary psql -U postgres -c "ALTER ROLE app SET idle_session_timeout = '5s';"
+```
+
+**Resultado:** `ALTER ROLE`.
+
+A configuração estabelece o encerramento de sessões que permaneçam ociosas por mais de cinco segundos.
+
 ### 5.3 Validação do statement_timeout
 
 Foi aberta uma nova sessão do usuário `app` e executada uma consulta com duração superior ao limite configurado:
