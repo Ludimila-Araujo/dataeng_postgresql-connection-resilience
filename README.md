@@ -164,6 +164,41 @@ SELECT current_user, now();
 
 **Resultado:** conexão estabelecida com sucesso, comprovando o restabelecimento do acesso ao banco.
 
+### Medidas preventivas aplicadas
+
+Além da recuperação por encerramento administrativo das sessões, foram configuradas duas medidas preventivas na role `app`:
+
+```sql
+ALTER ROLE app SET statement_timeout = '3s';
+ALTER ROLE app SET idle_session_timeout = '5s';
+```
+
+As configurações foram aplicadas a novas sessões e tiveram seus comportamentos verificados experimentalmente.
+
+**Teste do `statement_timeout`:**
+
+Foi executada a consulta:
+
+```sql
+SELECT pg_sleep(30);
+```
+
+O PostgreSQL cancelou a execução, retornando:
+
+```text
+ERROR: canceling statement due to statement timeout
+```
+
+**Teste do `idle_session_timeout`:**
+
+Foi aberta uma nova sessão interativa com o usuário `app`. Após o período de inatividade, o PostgreSQL encerrou a conexão, retornando:
+
+```text
+FATAL: terminating connection due to idle-session timeout
+```
+
+Os dois testes confirmaram o funcionamento das configurações preventivas.
+
 ## 9. Evidências experimentais
 
 As capturas de tela e registros das execuções estão organizados no diretório `evidencias/`.
@@ -171,3 +206,5 @@ As capturas de tela e registros das execuções estão organizados no diretório
 | Diretório | Conteúdo |
 |---|---|
 | [Exec
+
+
