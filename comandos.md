@@ -1,94 +1,171 @@
-\# Registro de comandos e execução
+# Registro de comandos e execução
 
+**Projeto:** PostgreSQL Connection Resilience  
+**Cenário:** D – Esgotamento de conexões  
+**Ambiente:** PostgreSQL com Docker Compose  
+**Diretório do ambiente:** `C:\Users\ludim\lab1`
 
+## 1. Preparação e validação do ambiente
 
-\*\*Projeto:\*\* PostgreSQL Connection Resilience  
+### 1.1 Verificação dos containers
 
-\*\*Cenário:\*\* D – Esgotamento de conexões  
+```cmd
+cd /d C:\Users\ludim\lab1
+docker compose ps
+```
 
-\*\*Ambiente:\*\* PostgreSQL com Docker Compose
+**Resultado:** containers do PostgreSQL primário e da réplica em execução.
 
+- Primário: porta `5442`.
+- Réplica: porta `5443`.
 
+### 1.2 Verificação do estado dos servidores
 
-\## 1. Preparação e validação do ambiente
+No primário:
 
+```cmd
+docker compose exec primary psql -U postgres -c "SELECT pg_is_in_recovery();"
+```
 
+**Resultado:** `false`, confirmando que o servidor atua como primário.
 
-| Horário | Comando | Objetivo | Resultado |
+Na réplica:
 
-|---|---|---|---|
+```cmd
+docker compose exec replica psql -U postgres -c "SELECT pg_is_in_recovery();"
+```
 
-| A preencher | A preencher | Validar os containers | A preencher |
+**Resultado:** `true`, confirmando que o servidor está em recuperação, atuando como réplica.
 
-| A preencher | A preencher | Validar o estado do primário e da réplica | A preencher |
+## 2. Reprodução do incidente
 
+### 2.1 Criação do usuário da aplicação
 
+Executado no primário:
 
-\## 2. Reprodução do incidente
+```cmd
+docker compose exec primary psql -U postgres -c "CREATE ROLE app LOGIN PASSWORD 'app' CONNECTION LIMIT 3;"
+```
 
+**Resultado:** usuário `app` criado com limite de três conexões simultâneas.
 
+### 2.2 Primeira execução
 
-| Horário | Comando | Objetivo | Resultado |
+Foram abertas três sessões, em terminais separados:
 
-|---|---|---|---|
+```cmd
+docker compose exec primary psql -U app -d postgres -c "SELECT pg_sleep(300);"
+```
 
-| A preencher | A preencher | Criar o usuário da aplicação com limite de conexões | A preencher |
+**Resultado:** três sessões simultâneas permaneceram ativas.
 
-| A preencher | A preencher | Ocupar a primeira conexão | A preencher |
+**Horário da tentativa de quarta conexão:** 12:43.
 
-| A preencher | A preencher | Ocupar a segunda conexão | A preencher |
+Comando utilizado:
 
-| A preencher | A preencher | Ocupar a terceira conexão | A preencher |
+```cmd
+docker compose exec primary psql -U app -d postgres -c "SELECT current_user;"
+```
 
-| A preencher | A preencher | Tentar estabelecer a quarta conexão | A preencher |
+**Resultado:** conexão recusada com a mensagem:
 
+```text
+FATAL: too many connections for role "app"
+```
 
+### 2.3 Segunda execução controlada
 
-\## 3. Diagnóstico
+Após a primeira execução, foi realizada uma nova reprodução, com tempo de espera ampliado:
 
+```cmd
+docker compose exec primary psql -U app -d postgres -c "SELECT pg_sleep(1800);"
+```
 
+O comando foi executado em três terminais separados.
 
-| Horário | Comando | Objetivo | Resultado |
+**Horário da tentativa de quarta conexão:** 13:29.
 
-|---|---|---|---|
+Comando utilizado:
 
-| A preencher | A preencher | Consultar as sessões da aplicação em `pg\_stat\_activity` | A preencher |
+```cmd
+docker compose exec primary psql -U app -d postgres -c "SELECT current_user;"
+```
 
+**Resultado:** conexão recusada com a mensagem:
 
+```text
+FATAL: too many connections for role "app"
+```
 
-\## 4. Correção e validação
+## 3. Diagnóstico
 
+Consulta executada no primário:
 
+```cmd
+docker compose exec primary psql -U postgres -c "SELECT pid, usename, state, now() - query_start AS tempo FROM pg_stat_activity WHERE usename = 'app';"
+```
 
-| Horário | Comando | Objetivo | Resultado |
+**Resultado da primeira execução:** três sessões do usuário `app` identificadas no estado `active`.
 
-|---|---|---|---|
+**Resultado da segunda execução:** três sessões do usuário `app` identificadas no estado `active`, executando `pg_sleep`.
 
-| A preencher | A preencher | Encerrar as sessões responsáveis pelo esgotamento | A preencher |
+## 4. Correção e validação
 
-| A preencher | A preencher | Confirmar o restabelecimento de conexões | A preencher |
+### 4.1 Primeira execução
 
+Foi realizada uma tentativa de encerramento das sessões:
 
+```cmd
+docker compose exec primary psql -U postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'app';"
+```
 
-\## 5. Prevenção
+**Resultado:** retorno `(0 rows)`. As sessões já haviam terminado naturalmente antes da execução do comando. Portanto, essa tentativa não comprovou a recuperação por encerramento administrativo.
 
+Posteriormente, uma nova conexão foi estabelecida com sucesso:
 
+```cmd
+docker compose exec primary psql -U app -d postgres -c "SELECT current_user, now();"
+```
 
-| Horário | Comando | Objetivo | Resultado |
+### 4.2 Segunda execução controlada
 
-|---|---|---|---|
+O encerramento administrativo foi executado novamente, utilizando o usuário administrador:
 
-| A preencher | A preencher | Configurar `statement\_timeout` | A preencher |
+```cmd
+docker compose exec primary psql -U postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'app';"
+```
 
-| A preencher | A preencher | Configurar `idle\_session\_timeout` | A preencher |
+**Resultado:** três sessões encerradas com sucesso (`true`).
 
-| A preencher | A preencher | Testar os limites em uma nova sessão | A preencher |
+### 4.3 Validação da recuperação
 
+Após o encerramento das sessões, foi realizada uma nova conexão:
 
+```cmd
+docker compose exec primary psql -U app -d postgres -c "SELECT current_user, now();"
+```
 
-\---
+**Resultado:** conexão estabelecida com sucesso. O usuário `app` voltou a acessar o banco.
 
+## 5. Prevenção
 
+**Status:** etapa ainda não executada.
 
-\*\*Observação:\*\* os horários e resultados deverão corresponder à execução real. Nenhum resultado será presumido.
+Comandos previstos para limitar o tempo de execução de consultas e o tempo de permanência de sessões ociosas:
 
+```sql
+ALTER ROLE app SET statement_timeout = '3s';
+ALTER ROLE app SET idle_session_timeout = '5s';
+```
+
+Após a configuração, será realizada a validação em uma nova sessão do usuário `app`.
+
+## 6. Observações sobre as medições
+
+- **RTO:** na segunda execução, aproximadamente 2 minutos entre a recusa da quarta conexão, às 13:29, e o restabelecimento do acesso, às 13:31.
+- **RPO:** não houve perda de dados persistidos observada durante o experimento. Como não foram realizadas operações de escrita durante a reprodução, o RPO efetivo não foi medido.
+- Os horários registrados correspondem aos dados observados durante as execuções.
+
+---
+
+**Observação:** este documento registra os comandos e resultados efetivamente observados. As etapas ainda não executadas permanecem identificadas como pendentes.
