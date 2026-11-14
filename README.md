@@ -21,6 +21,7 @@ O trabalho tem como objetivo reproduzir, diagnosticar e tratar um incidente de d
 | Instância réplica | Porta 5443 |
 | Repositório | [GitHub](https://github.com/Ludimila-Araujo/dataeng_postgresql-connection-resilience) |
 
+
 ## 2. Cenário do incidente
 
 O cenário D simula o esgotamento de conexões disponíveis para um usuário da aplicação, provocando a recusa de novas conexões ao banco de dados.
@@ -38,6 +39,7 @@ Ao tentar estabelecer uma quarta conexão, o PostgreSQL retornou:
 ```text
 FATAL: too many connections for role "app"
 ```
+
 
 ## 3. Ambiente e arquitetura
 
@@ -57,6 +59,7 @@ SELECT pg_is_in_recovery();
 Resultado esperado:
 - Primário: `false`.
 - Réplica: `true`.
+
 
 ## 4. Reprodução do incidente
 
@@ -84,6 +87,7 @@ O procedimento permitiu:
 4. Encerrar administrativamente as sessões.
 5. Confirmar o restabelecimento de uma nova conexão.
 
+
 ## 5. Linha do tempo
 
 ### Execução 01
@@ -103,6 +107,7 @@ O procedimento permitiu:
 | 13:29 | Diagnóstico com `pg_stat_activity` | Três sessões `active` |
 | Após o diagnóstico | Execução de `pg_terminate_backend()` | Três sessões encerradas com sucesso |
 | 13:31:17 | Nova tentativa de conexão | Conexão estabelecida |
+
 
 ## 6. Métricas de recuperação
 
@@ -130,6 +135,7 @@ Não foram observadas perdas de dados persistidos. Entretanto, não foi possíve
 
 Não foi necessário realizar promoção da réplica ou procedimento de failover. A recuperação ocorreu diretamente no primário.
 
+
 ## 7. Análise da causa raiz
 
 A causa raiz identificada foi o esgotamento do limite individual de conexões configurado para a role `app`.
@@ -141,6 +147,7 @@ A consulta à visão `pg_stat_activity` confirmou a existência das três sessõ
 **Impacto observado:** impossibilidade de estabelecer novas conexões utilizando a role `app` enquanto as três conexões existentes ocupavam seu limite.
 
 O experimento demonstrou o esgotamento do limite individual da role, não sendo suficiente para concluir que o limite global de conexões do servidor também tenha sido atingido.
+
 
 ## 8. Procedimento de recuperação
 
@@ -199,12 +206,58 @@ FATAL: terminating connection due to idle-session timeout
 
 Os dois testes confirmaram o funcionamento das configurações preventivas.
 
-## 9. Evidências experimentais
+### 8.1 Comparação com serviço gerenciado
 
-As capturas de tela e registros das execuções estão organizados no diretório `evidencias/`.
+Em um ambiente gerenciado com Amazon RDS for PostgreSQL, o incidente de esgotamento de conexões poderia ser tratado com recursos adicionais de gerenciamento e monitoramento.
 
-| Diretório | Conteúdo |
+O **Amazon RDS Proxy** atua como intermediário entre a aplicação e o banco de dados, gerenciando um conjunto de conexões que podem ser reutilizadas por diferentes solicitações. Esse mecanismo reduz a necessidade de estabelecer conexões diretamente com o banco a cada requisição e permite configurar limites para o pool, tempos de espera e encerramento de conexões de clientes ociosas.
+
+O monitoramento do ambiente também permitiria acompanhar métricas relacionadas às conexões e aos recursos do banco, possibilitando identificar comportamentos anormais e configurar alarmes para situações de risco.
+
+Já o recurso **Multi-AZ** oferece alta disponibilidade por meio de uma instância standby em outra zona de disponibilidade, permitindo o failover automático diante de determinadas falhas de infraestrutura. Entretanto, esse mecanismo não resolve diretamente o esgotamento de conexões provocado por uma aplicação ou usuário.
+
+Dessa forma, para o incidente reproduzido neste trabalho, o RDS Proxy seria o recurso mais diretamente relacionado à prevenção e ao gerenciamento do consumo de conexões, enquanto o Multi-AZ complementaria a arquitetura oferecendo disponibilidade diante de falhas de infraestrutura.
+
+Assim como no ambiente experimental, o uso de um proxy não elimina a necessidade de configurar limites adequados, controlar a concorrência e monitorar o comportamento das aplicações.
+
+
+## 9. Respostas às perguntas do cenário
+
+### 9.1 Por que limitar conexões por usuário e não apenas pelo limite global?
+
+O limite global de conexões do PostgreSQL protege os recursos gerais do servidor, mas não impede que uma única aplicação ou usuário consuma grande parte das conexões disponíveis. Assim, a definição de limites individuais por role permite isolar o consumo de recursos, evitando que uma aplicação monopolize as conexões e prejudique o acesso de outros usuários e serviços. Dessa forma, no experimento, a role `app` foi configurada com limite de três conexões simultâneas. Quando esse limite foi atingido, novas conexões utilizando a mesma role foram recusadas, enquanto o servidor PostgreSQL permaneceu em execução.
+
+Em conclusão, os limites por usuário complementam o limite global, contribuindo para o isolamento e a disponibilidade dos serviços que compartilham o banco de dados.
+
+### 9.2 Qual seria o papel de um pool de conexões ou proxy?
+
+Um pool de conexões ou proxy atua como intermediário entre a aplicação e o banco de dados, gerenciando um conjunto limitado de conexões que podem ser reutilizadas por diferentes solicitações. Essa abordagem reduz a necessidade de estabelecer novas conexões diretamente com o PostgreSQL a cada solicitação, contribuindo para controlar a concorrência e evitar o consumo excessivo de conexões disponíveis.
+
+Nesta perspectiva, ferramentas como PgBouncer e Amazon RDS Proxy oferecem mecanismos de gerenciamento e reutilização de conexões. Dessa forma, ajudam a reduzir a pressão sobre o banco de dados e a melhorar a disponibilidade dos serviços. É importante salientar que o uso de um pool ou proxy não elimina a necessidade de configurar limites de conexões, tempos de espera e políticas de controle de carga.
+
+
+## 10. Evidências experimentais
+
+As capturas de tela das execuções estão organizadas no diretório `evidencias/`, separadas conforme a execução do experimento.
+
+### Execução 01
+
+| Arquivo | Evidência |
 |---|---|
-| [Exec
+| `01_esgotamento_conexoes.png` | Reprodução do esgotamento de conexões |
+| `02_diagnostico_sessoes.png` | Identificação das sessões ativas |
+| `03_tentativa_recuperacao.png` | Tentativa inicial de recuperação |
 
+### Execução 02
 
+| Arquivo | Evidência |
+|---|---|
+| `01_diagnostico_tres_sessoes_ativas.png` | Diagnóstico das três sessões ativas |
+| `02_terminacao_administrativa_tres_sessoes_confirmada.png` | Encerramento administrativo das sessões |
+| `03_nova_conexao_bem_sucedida.png` | Confirmação do restabelecimento da conexão |
+| `04_configuracao_statement_timeout.png` | Configuração do limite de execução |
+| `05_configuracao_idle_session_timeout.png` | Configuração do limite de inatividade |
+| `06_teste_statement_timeout.png` | Validação do cancelamento de consulta |
+| `07_teste_idle_session_timeout.png` | Validação do encerramento de sessão ociosa |
+
+As capturas documentam a reprodução do incidente, o diagnóstico, a recuperação e a validação das medidas preventivas.
